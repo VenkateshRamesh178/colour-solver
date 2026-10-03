@@ -19,9 +19,11 @@ from sklearn.cluster import KMeans
 # Restart-button-relative slot coordinates for the current game's layout.
 #
 # The reference point is the CENTER of the "Restart" button.
-# Each tuple is (dx, dy), in pixels.
+# Each tuple is (dx, dy), in pixels of a REFERENCE_WIDTH-wide screenshot.
 #
 # There are 3 rows x 4 tubes x 4 slots = 48 positions.
+REFERENCE_WIDTH = 720
+
 SLOT_OFFSETS = [
     # row 0
     [(-6, -879), (-6, -833), (-6, -777), (-6, -727)],
@@ -183,8 +185,23 @@ def bytes_to_state(data: bytes):
 
 
 def parse_image(image: np.ndarray):
-    """Parse a decoded BGR screenshot; see image_to_state() for the result."""
-    anchor = find_restart_button(image)
+    """
+    Parse a decoded BGR screenshot; see image_to_state() for the result.
+
+    The screenshot is first scaled to REFERENCE_WIDTH, so the returned
+    anchor and centers are in that scaled image's coordinates.
+    """
+    height, width = image.shape[:2]
+    if width != REFERENCE_WIDTH:
+        # Phones, messaging apps and photo pickers often resize screenshots.
+        scaled_height = round(height * REFERENCE_WIDTH / width)
+        interpolation = cv2.INTER_AREA if width > REFERENCE_WIDTH else cv2.INTER_CUBIC
+        image = cv2.resize(image, (REFERENCE_WIDTH, scaled_height), interpolation=interpolation)
+
+    try:
+        anchor = find_restart_button(image)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} (image is {width}x{height} pixels)") from None
     centers = get_slot_centers(anchor)
 
     # Flatten the 48 screenshot positions while remembering their locations.

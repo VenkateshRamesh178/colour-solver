@@ -25,7 +25,8 @@ async function load() {
 
   pyodide.FS.mkdirTree(WORKDIR);
   await Promise.all(SOURCES.map(async name => {
-    const res = await fetch(name);
+    // Revalidate so a redeploy is picked up despite Pages' 10-minute cache.
+    const res = await fetch(name, { cache: "no-cache" });
     if (!res.ok) throw new Error(`Could not load ${name} (${res.status}).`);
     pyodide.FS.writeFile(`${WORKDIR}/${name}`, await res.text());
   }));

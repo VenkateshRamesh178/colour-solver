@@ -94,13 +94,13 @@ export_html(solution, palette, "solution.html")
 
 ## Screenshot requirements
 
-The board reader uses fixed pixel offsets, so it expects screenshots like [the example](color-puzzle.jpeg):
+The board reader uses fixed pixel offsets measured on [the example](color-puzzle.jpeg), so it expects screenshots of the same layout:
 
-- **720 × 1600** pixels, portrait, with the game's 3 × 4 layout of 12 tubes.
-- The whole board and the cyan **Restart** button visible.
+- Portrait, with the same aspect ratio as the example (9:20, e.g. 720 × 1600 or 1080 × 2400). Any resolution works: images are scaled to 720 pixels wide before reading, so resized or recompressed copies (from messaging apps, cloud photo apps, etc.) are fine.
+- The game's 3 × 4 layout of 12 tubes, with the whole board and the cyan **Restart** button visible.
 - 10 colors, 4 blocks each, 2 empty tubes.
 
-Screenshots at other resolutions or with a different layout will fail with "Could not find the Restart button." or give a wrong board. To support them, adjust `SLOT_OFFSETS` and the search band in `find_restart_button()` in [image_to_state.py](image_to_state.py).
+Cropped screenshots or other layouts will fail with "Could not find the Restart button." (the message includes the image's size) or give a wrong board. To support them, adjust `SLOT_OFFSETS` and the search band in `find_restart_button()` in [image_to_state.py](image_to_state.py).
 
 ## Hosting your own copy on GitHub Pages
 
