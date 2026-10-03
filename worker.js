@@ -6,7 +6,9 @@
 //               { type: "result", id, body } same JSON body app.py returns
 //               { type: "error", id?, message }
 
-importScripts("https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js");
+// Must be a module worker: Pyodide 314's classic pyodide.js fails under
+// importScripts() in Chrome.
+import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.mjs";
 
 const SOURCES = [
   "app.py",

@@ -109,12 +109,25 @@ function setStatus(html, isError = false) {
 
 // The solver runs in the browser (Pyodide in a worker). Start loading it now
 // so it's warm by the time a screenshot arrives.
-const worker = new Worker("worker.js");
+const worker = new Worker("worker.js", { type: "module" });
 const pending = new Map();
 let nextId = 0;
 let solverReady = false;
 let loadError = null;
 setStatus('<span class="spinner"></span>Loading the solver (first visit downloads ~30 MB)…');
+
+function failLoad(message) {
+  loadError = message;
+  setStatus(loadError, true);
+  for (const { reject } of pending.values()) reject(new Error(loadError));
+  pending.clear();
+}
+
+// Fires if the worker script itself fails, e.g. the Pyodide CDN is unreachable.
+worker.onerror = e => {
+  e.preventDefault();
+  failLoad(`Failed to load the solver${e.message ? `: ${e.message}` : "."} Try reloading the page.`);
+};
 
 worker.onmessage = ({ data }) => {
   if (data.type === "ready") {
@@ -123,10 +136,7 @@ worker.onmessage = ({ data }) => {
     return;
   }
   if (data.id === undefined) {
-    loadError = data.message;
-    setStatus(loadError, true);
-    for (const { reject } of pending.values()) reject(new Error(loadError));
-    pending.clear();
+    failLoad(data.message);
     return;
   }
   const { resolve, reject } = pending.get(data.id);
