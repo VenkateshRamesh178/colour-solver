@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Color Puzzle Solution</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161c26;
+    --tube: #222a37;
+    --tube-edge: #3a4456;
+    --slot-empty: #121822;
+    --text: #e6edf3;
+    --muted: #8b96a8;
+    --accent: #22d3ee;
+    --src: #f59e0b;
+    --dst: #22d3ee;
+    --slot-h: 40px;
+    --slot-w: 76px;
+    --gap: 7px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .board {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(4, max-content);
+    justify-content: center;
+    gap: 22px 24px;
+    position: relative;
+  }
+  .tube-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .tube {
+    background: var(--tube);
+    border: 2px solid var(--tube-edge);
+    border-radius: 18px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .tube.src { border-color: var(--src); box-shadow: 0 0 14px -2px var(--src); }
+  .tube.dst { border-color: var(--dst); box-shadow: 0 0 14px -2px var(--dst); }
+  .tube.done { border-color: #4ade80; }
+  .slot {
+    width: var(--slot-w);
+    height: var(--slot-h);
+    border-radius: 9px;
+    background: var(--slot-empty);
+    border: 1px dashed #2a3446;
+  }
+  .slot.filled { border: 1px solid rgba(255,255,255,.35); }
+  .block {
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.35), 0 0 10px -1px var(--glow, transparent);
+  }
+  .label { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .flyer {
+    position: absolute;
+    border-radius: 9px;
+    border: 1px solid rgba(255,255,255,.5);
+    z-index: 10;
+    pointer-events: none;
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  button {
+    background: var(--tube);
+    color: var(--text);
+    border: 1px solid var(--tube-edge);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); color: #062a33; border-color: var(--accent); font-weight: 600; min-width: 84px; }
+  input[type=range] { accent-color: var(--accent); }
+  .scrub { flex: 1 1 200px; }
+  .speed { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .status { margin-top: 12px; font-size: 16px; min-height: 1.4em; }
+  .status b { color: var(--accent); }
+  aside {
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 14px;
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    position: sticky;
+    top: 24px;
+    align-self: start;
+  }
+  aside h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  li:hover { background: var(--tube); }
+  li.active { background: #0e3a44; outline: 1px solid var(--accent); }
+  li.past { color: var(--muted); }
+  li .n { width: 2.2em; color: var(--muted); text-align: right; }
+  li .chip { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+    aside { position: static; max-height: 320px; }
+  }
+  @media (max-width: 560px) {
+    :root { --slot-w: 50px; --slot-h: 28px; --gap: 5px; }
+    .board { gap: 14px 10px; padding: 12px; }
+    .tube { padding: 5px; border-radius: 12px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>Color Puzzle Solution</h1>
+    <p class="sub" id="summary"></p>
+    <div class="board" id="board"></div>
+    <div class="controls">
+      <button id="first" title="Start (Home)">⏮</button>
+      <button id="prev" title="Previous (←)">◀</button>
+      <button id="play" class="primary" title="Play / pause (Space)">Play</button>
+      <button id="next" title="Next (→)">▶</button>
+      <button id="last" title="End (End)">⏭</button>
+      <input id="scrub" class="scrub" type="range" min="0" value="0" aria-label="Step">
+      <label class="speed">Speed
+        <input id="speed" type="range" min="0.25" max="3" step="0.25" value="1">
+      </label>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+  <aside>
+    <h2>Moves</h2>
+    <ol id="moves"></ol>
+  </aside>
+</main>
+
+<script>
+// Injected by visualize.py:
+//   palette: [[r,g,b], ...]           color id -> RGB
+//   states:  [[[c,...], ...], ...]    each tube BOTTOM -> TOP (bottom is the open end)
+//   moves:   [{source, destination, amount, color}, ...]
+const DATA = /*__PUZZLE_DATA__*/;
+
+const CAPACITY = DATA.capacity;
+const rgb = c => `rgb(${DATA.palette[c].join(",")})`;
+const boardEl = document.getElementById("board");
+const movesEl = document.getElementById("moves");
+const statusEl = document.getElementById("status");
+const scrub = document.getElementById("scrub");
+const playBtn = document.getElementById("play");
+const speedEl = document.getElementById("speed");
+
+let step = 0;            // number of moves applied
+let playing = false;
+let animating = false;
+
+document.getElementById("summary").textContent =
+  `${DATA.moves.length} moves · blocks leave from the bottom of a tube`;
+scrub.max = DATA.moves.length;
+
+// Build tubes once; render() only recolors slots.
+const tubeEls = [];
+const slotEls = [];
+DATA.states[0].forEach((_, t) => {
+  const wrap = document.createElement("div");
+  wrap.className = "tube-wrap";
+  const tube = document.createElement("div");
+  tube.className = "tube";
+  const slots = [];
+  for (let i = 0; i < CAPACITY; i++) {
+    const s = document.createElement("div");
+    s.className = "slot";
+    tube.appendChild(s);
+    slots.push(s);
+  }
+  const label = document.createElement("div");
+  label.className = "label";
+  label.textContent = `Tube ${t + 1}`;
+  wrap.append(tube, label);
+  boardEl.appendChild(wrap);
+  tubeEls.push(tube);
+  slotEls.push(slots);
+});
+
+// Blocks stack against the TOP of the tube, so tube[len-1] sits in slot 0
+// and the movable bottom block tube[0] sits in slot len-1.
+function slotIndex(tube, i) { return tube.length - 1 - i; }
+
+function paintBlock(el, color) {
+  el.classList.add("filled", "block");
+  el.style.background = rgb(color);
+  el.style.setProperty("--glow", rgb(color));
+}
+
+function render() {
+  const state = DATA.states[step];
+  state.forEach((tube, t) => {
+    slotEls[t].forEach(s => {
+      s.className = "slot";
+      s.style.background = "";
+      s.style.removeProperty("--glow");
+    });
+    tube.forEach((c, i) => paintBlock(slotEls[t][slotIndex(tube, i)], c));
+    const done = tube.length === CAPACITY && tube.every(c => c === tube[0]);
+    tubeEls[t].className = "tube" + (done ? " done" : "");
+  });
+
+  const upcoming = DATA.moves[step];
+  if (upcoming && !playing) {
+    tubeEls[upcoming.source].classList.add("src");
+    tubeEls[upcoming.destination].classList.add("dst");
+  }
+
+  scrub.value = step;
+  document.getElementById("first").disabled = document.getElementById("prev").disabled = step === 0;
+  document.getElementById("next").disabled = document.getElementById("last").disabled = step === DATA.moves.length;
+
+  if (step === DATA.moves.length) {
+    statusEl.innerHTML = `<b>Solved</b> in ${DATA.moves.length} moves.`;
+  } else {
+    const m = DATA.moves[step];
+    statusEl.innerHTML = `Next (${step + 1}/${DATA.moves.length}): Tube <b>${m.source + 1}</b> → Tube <b>${m.destination + 1}</b>, ${m.amount} block${m.amount > 1 ? "s" : ""}`;
+  }
+
+  [...movesEl.children].forEach((li, i) => {
+    li.className = i === step ? "active" : i < step ? "past" : "";
+  });
+  const active = movesEl.children[step];
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+DATA.moves.forEach((m, i) => {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="n">${i + 1}.</span><span class="chip" style="background:${rgb(m.color)}"></span>Tube ${m.source + 1} → Tube ${m.destination + 1} <span style="color:var(--muted)">×${m.amount}</span>`;
+  li.onclick = () => { stop(); step = i; render(); };
+  movesEl.appendChild(li);
+});
+
+// Animate the moving blocks: drop out of the source's bottom, travel
+// below the destination, then rise into its lowest free slots.
+async function animateMove() {
+  const m = DATA.moves[step];
+  const before = DATA.states[step];
+  const after = DATA.states[step + 1];
+  const src = before[m.source];
+  const dst = after[m.destination];
+  const boardRect = boardEl.getBoundingClientRect();
+  const rel = el => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left - boardRect.left, y: r.top - boardRect.top, w: r.width, h: r.height };
+  };
+  const ms = 650 / Number(speedEl.value);
+  const drop = 26;
+
+  tubeEls[m.source].classList.add("src");
+  tubeEls[m.destination].classList.add("dst");
+
+  const anims = [];
+  for (let k = 0; k < m.amount; k++) {
+    // k = 0 is the lowest moving block in the source.
+    const fromEl = slotEls[m.source][slotIndex(src, k)];
+    const toEl = slotEls[m.destination][slotIndex(dst, k)];
+    const a = rel(fromEl), b = rel(toEl);
+
+    fromEl.className = "slot";
+    fromEl.style.background = "";
+
+    const fly = document.createElement("div");
+    fly.className = "flyer block";
+    Object.assign(fly.style, {
+      left: a.x + "px", top: a.y + "px", width: a.w + "px", height: a.h + "px",
+      background: rgb(m.color),
+    });
+    fly.style.setProperty("--glow", rgb(m.color));
+    boardEl.appendChild(fly);
+
+    const lowY = Math.max(a.y, b.y) + a.h + drop + k * (a.h + 4);
+    const dx = b.x - a.x;
+    anims.push(fly.animate([
+      { transform: "translate(0,0)" },
+      { transform: `translate(0,${lowY - a.y}px)`, offset: 0.3 },
+      { transform: `translate(${dx}px,${lowY - a.y}px)`, offset: 0.7 },
+      { transform: `translate(${dx}px,${b.y - a.y}px)` },
+    ], { duration: ms, easing: "ease-in-out", fill: "forwards", delay: k * 60 }).finished
+      .then(() => fly.remove()));
+  }
+  await Promise.all(anims);
+}
+
+async function next() {
+  if (animating || step >= DATA.moves.length) return;
+  animating = true;
+  await animateMove();
+  step++;
+  animating = false;
+  render();
+}
+
+function prev() {
+  if (animating || step === 0) return;
+  step--;
+  render();
+}
+
+async function play() {
+  if (step >= DATA.moves.length) { step = 0; render(); }
+  playing = true;
+  playBtn.textContent = "Pause";
+  while (playing && step < DATA.moves.length) {
+    await next();
+    if (playing) await new Promise(r => setTimeout(r, 250 / Number(speedEl.value)));
+  }
+  stop();
+}
+
+function stop() {
+  playing = false;
+  playBtn.textContent = "Play";
+  if (!animating) render();
+}
+
+playBtn.onclick = () => (playing ? stop() : play());
+document.getElementById("next").onclick = () => { stop(); next(); };
+document.getElementById("prev").onclick = () => { stop(); prev(); };
+document.getElementById("first").onclick = () => { stop(); step = 0; render(); };
+document.getElementById("last").onclick = () => { stop(); step = DATA.moves.length; render(); };
+scrub.oninput = () => { if (animating) return; stop(); step = Number(scrub.value); render(); };
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowRight") { stop(); next(); }
+  else if (e.key === "ArrowLeft") { stop(); prev(); }
+  else if (e.key === " ") { e.preventDefault(); playing ? stop() : play(); }
+  else if (e.key === "Home") { stop(); step = 0; render(); }
+  else if (e.key === "End") { stop(); step = DATA.moves.length; render(); }
+});
+
+render();
+</script>
+</body>
+</html>

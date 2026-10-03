@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Color Puzzle Solver</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161c26;
+    --tube: #222a37;
+    --edge: #3a4456;
+    --text: #e6edf3;
+    --muted: #8b96a8;
+    --accent: #22d3ee;
+    --error: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { max-width: 1060px; margin: 0 auto; padding: 28px 16px 0; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .drop {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: var(--panel);
+    border: 2px dashed var(--edge);
+    border-radius: 14px;
+    padding: 20px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop.over { background: #10262d; }
+  .drop img {
+    width: 72px;
+    height: 160px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--edge);
+    display: none;
+  }
+  .drop img.shown { display: block; }
+  .drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  .drop span { color: var(--muted); }
+  input[type=file] { display: none; }
+  .status { margin: 16px 0 0; min-height: 1.4em; }
+  .status.error { color: var(--error); }
+  .status b { color: var(--accent); }
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 8px;
+    vertical-align: -2px;
+    border: 2px solid var(--edge);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+    margin-top: 8px;
+    background: var(--bg);
+  }
+  iframe[hidden] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Color Puzzle Solver</h1>
+  <p class="sub">Upload a screenshot of the daily puzzle to get the fewest-move solution.</p>
+
+  <label class="drop" id="drop">
+    <img id="preview" alt="Screenshot preview">
+    <div>
+      <strong>Drop a screenshot here, click to choose, or paste (Ctrl+V)</strong>
+      <span>PNG or JPEG, taken with the full board and the Restart button visible.</span>
+    </div>
+    <input type="file" id="file" accept="image/*">
+  </label>
+
+  <p class="status" id="status"></p>
+</header>
+
+<iframe id="result" title="Solution" hidden></iframe>
+
+<script>
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("file");
+const preview = document.getElementById("preview");
+const statusEl = document.getElementById("status");
+const frame = document.getElementById("result");
+let busy = false;
+
+function setStatus(html, isError = false) {
+  statusEl.innerHTML = html;
+  statusEl.classList.toggle("error", isError);
+}
+
+// The solver runs in the browser (Pyodide in a worker). Start loading it now
+// so it's warm by the time a screenshot arrives.
+const worker = new Worker("worker.js");
+const pending = new Map();
+let nextId = 0;
+let solverReady = false;
+let loadError = null;
+setStatus('<span class="spinner"></span>Loading the solver (first visit downloads ~30 MB)…');
+
+worker.onmessage = ({ data }) => {
+  if (data.type === "ready") {
+    solverReady = true;
+    if (!busy) setStatus("Solver ready.");
+    return;
+  }
+  if (data.id === undefined) {
+    loadError = data.message;
+    setStatus(loadError, true);
+    for (const { reject } of pending.values()) reject(new Error(loadError));
+    pending.clear();
+    return;
+  }
+  const { resolve, reject } = pending.get(data.id);
+  pending.delete(data.id);
+  data.type === "result" ? resolve(data.body) : reject(new Error(data.message));
+};
+
+function solveInWorker(bytes) {
+  if (loadError) return Promise.reject(new Error(loadError));
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    worker.postMessage({ id, bytes }, [bytes.buffer]);
+  });
+}
+
+async function handle(file) {
+  if (!file || busy) return;
+  if (!file.type.startsWith("image/")) {
+    setStatus("That file is not an image.", true);
+    return;
+  }
+
+  busy = true;
+  preview.src = URL.createObjectURL(file);
+  preview.classList.add("shown");
+  frame.hidden = true;
+  setStatus(solverReady
+    ? '<span class="spinner"></span>Reading the board and searching for the shortest solution…'
+    : '<span class="spinner"></span>Still loading the solver; your screenshot will be solved as soon as it\'s ready…');
+
+  try {
+    const body = await solveInWorker(new Uint8Array(await file.arrayBuffer()));
+    if (body.error) throw new Error(body.error);
+
+    setStatus(`Solved in <b>${body.moves} moves</b> · ${body.expanded.toLocaleString()} states searched in ${body.seconds}s`);
+    frame.srcdoc = body.html;
+    frame.hidden = false;
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    busy = false;
+  }
+}
+
+// Size the frame to its content so the page scrolls as one document.
+function fitFrame() {
+  const doc = frame.contentDocument;
+  if (doc && doc.documentElement) frame.style.height = doc.documentElement.scrollHeight + "px";
+}
+frame.addEventListener("load", () => {
+  fitFrame();
+  frame.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+window.addEventListener("resize", fitFrame);
+
+fileInput.addEventListener("change", () => handle(fileInput.files[0]));
+
+["dragenter", "dragover"].forEach(type => drop.addEventListener(type, e => {
+  e.preventDefault();
+  drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach(type => drop.addEventListener(type, () => drop.classList.remove("over")));
+drop.addEventListener("drop", e => {
+  e.preventDefault();
+  handle(e.dataTransfer.files[0]);
+});
+
+document.addEventListener("paste", e => {
+  const item = [...e.clipboardData.items].find(i => i.type.startsWith("image/"));
+  if (item) handle(item.getAsFile());
+});
+</script>
+</body>
+</html>
