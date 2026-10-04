@@ -9,8 +9,8 @@ Upload a screenshot of the daily color-sorting puzzle and get the **fewest-move 
 ## What it does
 
 1. **Reads the board from the screenshot** ([image_to_state.py](image_to_state.py))
-   - Finds the cyan **Restart** button and uses it as an anchor point.
-   - Samples the 48 slot positions (12 tubes × 4 slots) at fixed offsets from that anchor.
+   - Finds the tubes from their outlines: the largest group of same-sized, tall rounded rectangles in the image.
+   - Samples the 4 slots of each tube at fixed fractions of the tube's height, so the board's size and position on screen don't matter.
    - Treats dark slots as empty, then groups the filled slots into the game's 10 colors with k-means clustering.
 2. **Solves it** ([solver.py](solver.py))
    - Runs an A* search with an admissible heuristic, so the answer is guaranteed to use the **minimum number of moves**.
@@ -96,11 +96,12 @@ export_html(solution, palette, "solution.html")
 
 The board reader uses fixed pixel offsets measured on [the example](color-puzzle.jpeg), so it expects screenshots of the same layout:
 
-- Portrait, with the same aspect ratio as the example (9:20, e.g. 720 × 1600 or 1080 × 2400). Any resolution works: images are scaled to 720 pixels wide before reading, so resized or recompressed copies (from messaging apps, cloud photo apps, etc.) are fine.
-- The game's 3 × 4 layout of 12 tubes, with the whole board and the cyan **Restart** button visible.
-- 10 colors, 4 blocks each, 2 empty tubes.
+The board reader finds the tubes wherever they are, so screenshots from any phone or tablet work: any resolution or aspect ratio, with or without the Reddit app around the board, cropped, or resized and recompressed by a messaging or photo app.
 
-Cropped screenshots or other layouts will fail with "Could not find the Restart button." (the message includes the image's size) or give a wrong board. To support them, adjust `SLOT_OFFSETS` and the search band in `find_restart_button()` in [image_to_state.py](image_to_state.py).
+- The whole board must be visible, with every tube uncut.
+- Use a screenshot of the unplayed board (every color still in 4 blocks, nothing selected).
+
+If no tubes are found the error is "Could not find the tubes." (with the image's size). If a board is read wrongly, the tunables are `SLOT_SPACING` and `OUTLINE_THRESHOLDS` in [image_to_state.py](image_to_state.py).
 
 ## Hosting your own copy on GitHub Pages
 
