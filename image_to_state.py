@@ -16,76 +16,100 @@ from sklearn.cluster import KMeans
 # the pouring/solving logic if we want TOP to mean the movable end.
 
 
-# Restart-button-relative slot coordinates for the current game's layout.
-#
-# The reference point is the CENTER of the "Restart" button.
-# Each tuple is (dx, dy), in pixels of a REFERENCE_WIDTH-wide screenshot.
-#
-# There are 3 rows x 4 tubes x 4 slots = 48 positions.
-REFERENCE_WIDTH = 720
+# Tubes are found from their outlines, so no fixed layout is assumed:
+# any phone, resolution, aspect ratio or crop works as long as the
+# whole board is visible.
+SLOTS_PER_TUBE = 4
 
-SLOT_OFFSETS = [
-    # row 0
-    [(-6, -879), (-6, -833), (-6, -777), (-6, -727)],
-    [(145, -879), (145, -833), (145, -777), (145, -727)],
-    [(295, -879), (295, -833), (295, -777), (295, -727)],
-    [(445, -879), (445, -833), (445, -777), (445, -727)],
+# Slot centers along a tube, as a fraction of the tube's outline height
+# measured from its center. Blocks are evenly spaced, 0.2125 heights apart.
+SLOT_SPACING = 0.2125
 
-    # row 1
-    [(-6, -599), (-6, -549), (-6, -498), (-6, -447)],
-    [(145, -599), (145, -549), (145, -498), (145, -447)],
-    [(295, -599), (295, -549), (295, -498), (295, -447)],
-    [(445, -599), (445, -549), (445, -498), (445, -447)],
-
-    # row 2
-    [(-6, -315), (-6, -264), (-6, -213), (-6, -162)],
-    [(145, -315), (145, -264), (145, -213), (145, -162)],
-    [(295, -315), (295, -264), (295, -213), (295, -162)],
-    [(445, -315), (445, -264), (445, -213), (445, -162)],
-]
+# Gray levels separating the tube outlines from the board background.
+# Several are tried because themes and image compression shift both.
+OUTLINE_THRESHOLDS = (40, 50, 32, 60, 25, 75)
 
 
-def find_restart_button(image: np.ndarray) -> tuple[float, float]:
-    """Find the center of the cyan Restart button."""
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+def find_tube_candidates(gray: np.ndarray, threshold: int) -> list[tuple[int, int, int, int]]:
+    """Bounding boxes (x, y, w, h) of tall, rounded-rectangle outlines."""
+    mask = (gray >= threshold).astype(np.uint8)
+    contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Cyan/turquoise UI buttons.
-    lower = np.array([85, 120, 150], dtype=np.uint8)
-    upper = np.array([105, 255, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower, upper)
-
-    # The Restart button is in the lower part of the screenshot.
-    mask[:1200] = 0
-    mask[1400:] = 0
-
-    contours, _ = cv2.findContours(
-        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    candidates = []
+    min_side = max(gray.shape) / 100
+    boxes = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        area = cv2.contourArea(contour)
-
-        if area > 1000 and w > 100 and h > 50:
-            candidates.append((area, x, y, w, h))
-
-    if not candidates:
-        raise RuntimeError("Could not find the Restart button.")
-
-    # The Restart button is the large cyan button on the left.
-    _, x, y, w, h = max(candidates, key=lambda c: c[0])
-    return x + w / 2, y + h / 2
+        if w < min_side or not 1.4 <= h / w <= 2.6:
+            continue
+        # A tube outline is a solid, nearly rectangular region.
+        if cv2.contourArea(contour) < 0.8 * w * h:
+            continue
+        boxes.append((x, y, w, h))
+    return boxes
 
 
-def get_slot_centers(anchor: tuple[float, float]) -> list[list[tuple[int, int]]]:
-    """Convert restart-relative offsets into absolute screenshot coordinates."""
-    ax, ay = anchor
+def largest_uniform_group(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    """
+    The largest set of same-sized, non-overlapping boxes: the tubes.
 
-    return [
-        [(round(ax + dx), round(ay + dy)) for dx, dy in tube]
-        for tube in SLOT_OFFSETS
-    ]
+    Each tube produces several nested outlines (outer frame, inner frame),
+    so for every size the outermost box per location is kept.
+    """
+    best = []
+    for _, _, ref_w, ref_h in boxes:
+        similar = [
+            b for b in boxes
+            if abs(b[2] - ref_w) <= 0.08 * ref_w and abs(b[3] - ref_h) <= 0.08 * ref_h
+        ]
+        similar.sort(key=lambda b: b[2] * b[3], reverse=True)
+
+        group = []
+        for box in similar:
+            cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+            if all(abs(cx - (g[0] + g[2] / 2)) > g[2] / 2 or abs(cy - (g[1] + g[3] / 2)) > g[3] / 2 for g in group):
+                group.append(box)
+
+        if len(group) > len(best):
+            best = group
+    return best
+
+
+def find_tubes(image: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Find the tubes' bounding boxes, ordered row by row, left to right."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    tubes = []
+    for threshold in OUTLINE_THRESHOLDS:
+        group = largest_uniform_group(find_tube_candidates(gray, threshold))
+        if len(group) > len(tubes):
+            tubes = group
+
+    if len(tubes) < 3:
+        raise RuntimeError(
+            "Could not find the tubes. Make sure the whole board is visible."
+        )
+
+    # Group into rows: tubes whose centers are within half a tube height.
+    tubes.sort(key=lambda b: b[1] + b[3] / 2)
+    rows = []
+    for box in tubes:
+        cy = box[1] + box[3] / 2
+        if rows and abs(cy - rows[-1][0]) < box[3] / 2:
+            rows[-1][1].append(box)
+        else:
+            rows.append((cy, [box]))
+
+    return [box for _, row in rows for box in sorted(row, key=lambda b: b[0])]
+
+
+def get_slot_centers(tubes: list[tuple[int, int, int, int]]) -> list[list[tuple[int, int]]]:
+    """Slot centers of every tube, TOP -> BOTTOM."""
+    centers = []
+    for x, y, w, h in tubes:
+        cx, cy = x + w / 2, y + h / 2
+        offsets = [(i - (SLOTS_PER_TUBE - 1) / 2) * SLOT_SPACING for i in range(SLOTS_PER_TUBE)]
+        centers.append([(round(cx), round(cy + f * h)) for f in offsets])
+    return centers
 
 
 def sample_slot(image: np.ndarray, center: tuple[int, int], radius: int = 5) -> np.ndarray:
@@ -122,25 +146,29 @@ def is_blank(rgb: np.ndarray) -> bool:
 
 def build_color_palette(samples: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
     """
-    Cluster the detected filled-slot colors into 10 game colors.
+    Cluster the detected filled-slot colors into the game's colors.
+
+    Every color fills exactly one tube, so there are
+    (filled slots / SLOTS_PER_TUBE) of them: 10 in the usual board.
 
     Returns:
-        palette: 10 RGB color centers
-        labels:  one label (0..9) per input sample
+        palette: one RGB center per color
+        labels:  one color ID per filled sample
     """
     filled = np.array([sample for sample in samples if not is_blank(sample)])
 
     if len(filled) == 0:
         raise RuntimeError("No filled slots were detected.")
 
-    # This game has 10 colors. In a valid board there should be four
-    # occurrences of each, so KMeans is a convenient first implementation.
-    if len(filled) < 10:
+    n_colors, remainder = divmod(len(filled), SLOTS_PER_TUBE)
+    if remainder or n_colors < 2:
         raise RuntimeError(
-            f"Only {len(filled)} filled slots detected; cannot identify 10 colors."
+            f"Detected {len(filled)} filled slots, which is not a whole number "
+            f"of {SLOTS_PER_TUBE}-block colors. Use a screenshot of the "
+            "unplayed board."
         )
 
-    model = KMeans(n_clusters=10, random_state=0, n_init=10)
+    model = KMeans(n_clusters=n_colors, random_state=0, n_init=10)
     raw_labels = model.fit_predict(filled)
     raw_palette = model.cluster_centers_
 
@@ -150,7 +178,7 @@ def build_color_palette(samples: list[np.ndarray]) -> tuple[np.ndarray, np.ndarr
     )
 
     palette = raw_palette[order]
-    remap = np.empty(10, dtype=np.int32)
+    remap = np.empty(n_colors, dtype=np.int32)
     for new_id, old_id in enumerate(order):
         remap[old_id] = new_id
 
@@ -160,12 +188,12 @@ def build_color_palette(samples: list[np.ndarray]) -> tuple[np.ndarray, np.ndarr
 
 def image_to_state(image_path: str | Path):
     """
-    Convert a screenshot into a 3x4 board of four-slot tubes.
+    Convert a screenshot into a list of four-slot tubes.
 
     Returns:
-        state: list of 12 tubes, each containing four values TOP -> BOTTOM
-        palette: RGB palette for IDs 0..9
-        anchor: detected Restart-button center
+        state: one list per tube, four values TOP -> BOTTOM, row by row
+        palette: RGB palette, indexed by color ID
+        tubes: detected tube bounding boxes (x, y, w, h)
         centers: absolute slot centers
     """
     image = cv2.imread(str(image_path))
@@ -185,41 +213,28 @@ def bytes_to_state(data: bytes):
 
 
 def parse_image(image: np.ndarray):
-    """
-    Parse a decoded BGR screenshot; see image_to_state() for the result.
-
-    The screenshot is first scaled to REFERENCE_WIDTH, so the returned
-    anchor and centers are in that scaled image's coordinates.
-    """
+    """Parse a decoded BGR screenshot; see image_to_state() for the result."""
     height, width = image.shape[:2]
-    if width != REFERENCE_WIDTH:
-        # Phones, messaging apps and photo pickers often resize screenshots.
-        scaled_height = round(height * REFERENCE_WIDTH / width)
-        interpolation = cv2.INTER_AREA if width > REFERENCE_WIDTH else cv2.INTER_CUBIC
-        image = cv2.resize(image, (REFERENCE_WIDTH, scaled_height), interpolation=interpolation)
-
     try:
-        anchor = find_restart_button(image)
+        tubes = find_tubes(image)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc} (image is {width}x{height} pixels)") from None
-    centers = get_slot_centers(anchor)
+    centers = get_slot_centers(tubes)
 
-    # Flatten the 48 screenshot positions while remembering their locations.
-    samples = []
-    for tube in centers:
-        for center in tube:
-            samples.append(sample_slot(image, center))
+    # Sample a patch about a tenth of the block width, whatever the scale.
+    radius = max(1, round(min(w for _, _, w, _ in tubes) * 0.04))
+    sampled = [[sample_slot(image, center, radius) for center in tube] for tube in centers]
 
-    palette, filled_labels = build_color_palette(samples)
+    palette, filled_labels = build_color_palette([s for tube in sampled for s in tube])
 
-    # Reconstruct the 12 tubes.
+    # Reconstruct the tubes.
     state = []
     filled_index = 0
 
-    for tube in centers:
+    for tube in sampled:
         parsed_tube = []
 
-        for sample in [sample_slot(image, center) for center in tube]:
+        for sample in tube:
             if is_blank(sample):
                 parsed_tube.append(-1)
             else:
@@ -228,11 +243,11 @@ def parse_image(image: np.ndarray):
 
         state.append(parsed_tube)
 
-    return state, palette, anchor, centers
+    return state, palette, tubes, centers
 
 
-def print_state(state, palette, anchor):
-    print(f"Restart center: ({anchor[0]:.1f}, {anchor[1]:.1f})")
+def print_state(state, palette, tubes):
+    print(f"Found {len(tubes)} tubes, each about {tubes[0][2]}x{tubes[0][3]} pixels")
     print("\nColor IDs (RGB):")
     for i, rgb in enumerate(palette):
         print(f"  {i}: ({round(rgb[0])}, {round(rgb[1])}, {round(rgb[2])})")
@@ -256,8 +271,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    state, palette, anchor, centers = image_to_state(args.image)
-    print_state(state, palette, anchor)
+    state, palette, tubes, centers = image_to_state(args.image)
+    print_state(state, palette, tubes)
 
     # The parser yields TOP -> BOTTOM with -1 blanks; the solver expects
     # BOTTOM -> TOP with blanks removed.
